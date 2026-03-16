@@ -4,13 +4,14 @@ import { supabase } from '../lib/supabase'
 import { getDrivingTimes, invalidateHomeCache } from '../lib/distanceService'
 import LocationMap from '../components/LocationMap'
 import CategoryBadge from '../components/CategoryBadge'
-import { ArrowLeft, RefreshCw, Clock, MapPin } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Clock, MapPin, Check } from 'lucide-react'
 
 export default function HomeDetail() {
   const { id } = useParams()
   const [home, setHome] = useState(null)
   const [savedLocations, setSavedLocations] = useState([])
   const [drivingTimes, setDrivingTimes] = useState([])
+  const [activeLocations, setActiveLocations] = useState(null)
   const [loading, setLoading] = useState(true)
   const [calculating, setCalculating] = useState(false)
   const [error, setError] = useState(null)
@@ -30,6 +31,7 @@ export default function HomeDetail() {
 
       setHome(homeData)
       setSavedLocations(locsData || [])
+      setActiveLocations(new Set((locsData || []).map(l => l.id)))
 
       if (forceRefresh) await invalidateHomeCache(id)
 
@@ -44,6 +46,22 @@ export default function HomeDetail() {
   }, [id])
 
   useEffect(() => { load() }, [load])
+
+  function toggleLocation(locId) {
+    setActiveLocations(prev => {
+      const next = new Set(prev)
+      next.has(locId) ? next.delete(locId) : next.add(locId)
+      return next
+    })
+  }
+
+  function selectAll() {
+    setActiveLocations(new Set(savedLocations.map(l => l.id)))
+  }
+
+  function clearAll() {
+    setActiveLocations(new Set())
+  }
 
   if (loading) return <div className="flex items-center justify-center py-24 text-gray-400 text-sm">Calculating driving times…</div>
   if (error) return <div className="text-red-500 text-sm py-8">{error}</div>
@@ -61,13 +79,17 @@ export default function HomeDetail() {
     grouped[key].push({ ...loc, ...timeMap[loc.id] })
   })
 
-  // Compute category averages
+  const allActive = activeLocations && activeLocations.size === savedLocations.length
+  const someInactive = activeLocations && activeLocations.size < savedLocations.length
+
+  // Compute category averages (only counting active locations)
   const categoryAverages = Object.entries(grouped).map(([category, locs]) => {
-    const withTimes = locs.filter(l => l.driving_minutes != null)
+    const withTimes = locs.filter(l => l.driving_minutes != null && activeLocations?.has(l.id))
     const avg = withTimes.length
       ? Math.round(withTimes.reduce((s, l) => s + l.driving_minutes, 0) / withTimes.length)
       : null
-    return { category, locs, avg, count: withTimes.length }
+    const activeCount = locs.filter(l => activeLocations?.has(l.id)).length
+    return { category, locs, avg, count: withTimes.length, activeCount }
   })
 
   // Sort: categories with data first, then by avg time
@@ -77,6 +99,8 @@ export default function HomeDetail() {
     if (b.avg == null) return -1
     return a.avg - b.avg
   })
+
+  const activeLocs = savedLocations.filter(l => !activeLocations || activeLocations.has(l.id))
 
   return (
     <div className="space-y-6">
@@ -107,24 +131,48 @@ export default function HomeDetail() {
         </div>
       )}
 
+      {/* Select all / Clear all */}
+      {savedLocations.length > 0 && someInactive && (
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          <span>{activeLocations.size} of {savedLocations.length} places active</span>
+          <button onClick={selectAll} className="text-blue-600 hover:underline font-medium">Select all</button>
+          <button onClick={clearAll} className="hover:underline">Clear all</button>
+        </div>
+      )}
+      {savedLocations.length > 0 && allActive && (
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          <span>All {savedLocations.length} places active</span>
+          <button onClick={clearAll} className="hover:underline">Clear all</button>
+        </div>
+      )}
+
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Results */}
         <div className="space-y-4">
-          {categoryAverages.map(({ category, locs, avg, count }) => (
-            <CategoryCard key={category} category={category} locs={locs} avg={avg} count={count} />
+          {categoryAverages.map(({ category, locs, avg, count, activeCount }) => (
+            <CategoryCard
+              key={category}
+              category={category}
+              locs={locs}
+              avg={avg}
+              count={count}
+              activeCount={activeCount}
+              activeLocations={activeLocations}
+              onToggle={toggleLocation}
+            />
           ))}
         </div>
 
         {/* Map */}
         <div className="lg:sticky lg:top-20 h-[480px] rounded-2xl overflow-hidden border border-gray-200 shadow-sm">
-          <LocationMap home={home} savedLocations={savedLocations} drivingTimes={drivingTimes} />
+          <LocationMap home={home} savedLocations={activeLocs} drivingTimes={drivingTimes} />
         </div>
       </div>
     </div>
   )
 }
 
-function CategoryCard({ category, locs, avg, count }) {
+function CategoryCard({ category, locs, avg, count, activeCount, activeLocations, onToggle }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -136,7 +184,11 @@ function CategoryCard({ category, locs, avg, count }) {
       >
         <div className="flex items-center gap-3">
           <CategoryBadge category={category === 'Uncategorized' ? null : category} />
-          <span className="text-xs text-gray-400">{locs.length} place{locs.length !== 1 ? 's' : ''}</span>
+          <span className="text-xs text-gray-400">
+            {activeCount === locs.length
+              ? `${locs.length} place${locs.length !== 1 ? 's' : ''}`
+              : `${activeCount} of ${locs.length} active`}
+          </span>
         </div>
         <div className="flex items-center gap-3">
           {avg != null ? (
@@ -155,21 +207,41 @@ function CategoryCard({ category, locs, avg, count }) {
       {/* Expanded breakdown */}
       {expanded && (
         <div className="border-t border-gray-100 divide-y divide-gray-100">
-          {locs.map(loc => (
-            <div key={loc.id} className="flex items-center justify-between px-5 py-3">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-gray-800 truncate">{loc.name}</p>
-                <p className="text-xs text-gray-400 truncate mt-0.5">{loc.address}</p>
+          {locs.map(loc => {
+            const isActive = activeLocations?.has(loc.id) ?? true
+            return (
+              <div
+                key={loc.id}
+                className={`flex items-center gap-3 px-5 py-3 ${isActive ? '' : 'opacity-40'}`}
+              >
+                {/* Checkbox */}
+                <button
+                  onClick={e => { e.stopPropagation(); onToggle(loc.id) }}
+                  className={`shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
+                    isActive ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                  }`}
+                >
+                  {isActive && <Check size={10} className="text-white" />}
+                </button>
+
+                <div className="min-w-0 flex-1">
+                  <p className={`text-sm font-medium truncate ${isActive ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
+                    {loc.name}
+                  </p>
+                  <p className="text-xs text-gray-400 truncate mt-0.5">{loc.address}</p>
+                </div>
+                <div className="ml-4 shrink-0">
+                  {loc.driving_minutes != null ? (
+                    <span className={`text-sm font-semibold ${isActive ? 'text-blue-600' : 'text-gray-300'}`}>
+                      {loc.driving_minutes} min
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-300">—</span>
+                  )}
+                </div>
               </div>
-              <div className="ml-4 shrink-0">
-                {loc.driving_minutes != null ? (
-                  <span className="text-sm font-semibold text-blue-600">{loc.driving_minutes} min</span>
-                ) : (
-                  <span className="text-xs text-gray-300">—</span>
-                )}
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

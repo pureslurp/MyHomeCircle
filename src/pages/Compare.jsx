@@ -3,15 +3,17 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getDrivingTimes } from '../lib/distanceService'
 import CategoryBadge from '../components/CategoryBadge'
-import { BarChart3, Clock, ArrowRight, Check } from 'lucide-react'
+import { BarChart3, Clock, ArrowRight, Check, ChevronDown, ChevronUp } from 'lucide-react'
 
 export default function Compare() {
   const [homes, setHomes] = useState([])
   const [selected, setSelected] = useState([])
   const [savedLocations, setSavedLocations] = useState([])
-  const [results, setResults] = useState({}) // homeId -> { category -> avg minutes }
+  const [activeLocations, setActiveLocations] = useState(new Set())
+  const [results, setResults] = useState({}) // homeId -> { locationId -> minutes }
   const [loading, setLoading] = useState(false)
   const [initialized, setInitialized] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(true)
 
   useEffect(() => {
     async function load() {
@@ -21,6 +23,7 @@ export default function Compare() {
       ])
       setHomes(homesData || [])
       setSavedLocations(locsData || [])
+      setActiveLocations(new Set((locsData || []).map(l => l.id)))
     }
     load()
   }, [])
@@ -29,6 +32,32 @@ export default function Compare() {
     setSelected(sel =>
       sel.includes(homeId) ? sel.filter(id => id !== homeId) : [...sel, homeId]
     )
+  }
+
+  function toggleLocation(locId) {
+    setActiveLocations(prev => {
+      const next = new Set(prev)
+      next.has(locId) ? next.delete(locId) : next.add(locId)
+      return next
+    })
+  }
+
+  function toggleCategory(category) {
+    const catLocs = savedLocations.filter(l => (l.category || 'Uncategorized') === category)
+    const allActive = catLocs.every(l => activeLocations.has(l.id))
+    setActiveLocations(prev => {
+      const next = new Set(prev)
+      catLocs.forEach(l => allActive ? next.delete(l.id) : next.add(l.id))
+      return next
+    })
+  }
+
+  function selectAllLocations() {
+    setActiveLocations(new Set(savedLocations.map(l => l.id)))
+  }
+
+  function clearAllLocations() {
+    setActiveLocations(new Set())
   }
 
   async function compare() {
@@ -42,25 +71,9 @@ export default function Compare() {
         if (!home) return
 
         const times = await getDrivingTimes(homeId, home.lat, home.lng, savedLocations)
-        const timeMap = {}
-        times.forEach(t => { if (t) timeMap[t.saved_location_id] = t.driving_minutes })
-
-        // Compute per-category averages
-        const categoryMap = {}
-        savedLocations.forEach(loc => {
-          const key = loc.category || 'Uncategorized'
-          if (!categoryMap[key]) categoryMap[key] = []
-          if (timeMap[loc.id] != null) categoryMap[key].push(timeMap[loc.id])
-        })
-
-        const categoryAvgs = {}
-        Object.entries(categoryMap).forEach(([cat, mins]) => {
-          categoryAvgs[cat] = mins.length
-            ? Math.round(mins.reduce((a, b) => a + b, 0) / mins.length)
-            : null
-        })
-
-        newResults[homeId] = categoryAvgs
+        const locationTimes = {}
+        times.forEach(t => { if (t) locationTimes[t.saved_location_id] = t.driving_minutes })
+        newResults[homeId] = locationTimes
       })
     )
 
@@ -69,17 +82,24 @@ export default function Compare() {
     setLoading(false)
   }
 
+  // Compute category average for a home, respecting activeLocations
+  function getCategoryAvg(homeId, category) {
+    const locs = savedLocations.filter(l => (l.category || 'Uncategorized') === category && activeLocations.has(l.id))
+    const vals = locs.map(l => results[homeId]?.[l.id]).filter(v => v != null)
+    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null
+  }
+
   // All categories present across saved locations
   const allCategories = [...new Set(savedLocations.map(l => l.category || 'Uncategorized'))]
 
-  // Selected home objects
-  const selectedHomes = homes.filter(h => selected.includes(h.id))
+  // Selected home objects (maintain compare order)
+  const selectedHomes = selected.map(id => homes.find(h => h.id === id)).filter(Boolean)
 
-  // Best (lowest) time per category
+  // Best (lowest) time per category across selected homes
   function getBest(category) {
     let best = null
     selectedHomes.forEach(h => {
-      const v = results[h.id]?.[category]
+      const v = getCategoryAvg(h.id, category)
       if (v != null && (best == null || v < best)) best = v
     })
     return best
@@ -96,6 +116,14 @@ export default function Compare() {
       </div>
     )
   }
+
+  // Group saved locations by category for the filter panel
+  const locationsByCategory = {}
+  savedLocations.forEach(loc => {
+    const key = loc.category || 'Uncategorized'
+    if (!locationsByCategory[key]) locationsByCategory[key] = []
+    locationsByCategory[key].push(loc)
+  })
 
   return (
     <div className="space-y-6">
@@ -145,6 +173,91 @@ export default function Compare() {
         {selected.length === 1 && <p className="text-xs text-gray-400 mt-2">Select at least one more home to compare.</p>}
       </div>
 
+      {/* Filter places panel */}
+      {initialized && savedLocations.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+          <button
+            onClick={() => setFilterOpen(o => !o)}
+            className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold text-gray-700">Filter places</span>
+              <span className="text-xs text-gray-400">{activeLocations.size} of {savedLocations.length} active</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={e => { e.stopPropagation(); selectAllLocations() }}
+                onKeyDown={e => e.key === 'Enter' && (e.stopPropagation(), selectAllLocations())}
+                className="text-xs text-blue-600 hover:underline font-medium"
+              >
+                All
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={e => { e.stopPropagation(); clearAllLocations() }}
+                onKeyDown={e => e.key === 'Enter' && (e.stopPropagation(), clearAllLocations())}
+                className="text-xs text-gray-500 hover:underline"
+              >
+                None
+              </span>
+              {filterOpen ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+            </div>
+          </button>
+
+          {filterOpen && (
+            <div className="border-t border-gray-100 px-5 py-3 space-y-4">
+              {Object.entries(locationsByCategory).map(([category, locs]) => {
+                const allActive = locs.every(l => activeLocations.has(l.id))
+                const someActive = locs.some(l => activeLocations.has(l.id))
+                return (
+                  <div key={category}>
+                    {/* Category toggle */}
+                    <button
+                      onClick={() => toggleCategory(category)}
+                      className="flex items-center gap-2 mb-2 group"
+                    >
+                      <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                        allActive ? 'bg-blue-500 border-blue-500' : someActive ? 'bg-blue-200 border-blue-300' : 'border-gray-300'
+                      }`}>
+                        {allActive && <Check size={10} className="text-white" />}
+                        {!allActive && someActive && <div className="w-1.5 h-1.5 rounded-sm bg-blue-500" />}
+                      </div>
+                      <CategoryBadge category={category === 'Uncategorized' ? null : category} />
+                    </button>
+
+                    {/* Individual locations */}
+                    <div className="ml-6 space-y-1.5">
+                      {locs.map(loc => {
+                        const isActive = activeLocations.has(loc.id)
+                        return (
+                          <button
+                            key={loc.id}
+                            onClick={() => toggleLocation(loc.id)}
+                            className="flex items-center gap-2 w-full text-left group"
+                          >
+                            <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                              isActive ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                            }`}>
+                              {isActive && <Check size={10} className="text-white" />}
+                            </div>
+                            <span className={`text-sm truncate ${isActive ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
+                              {loc.name}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Comparison table */}
       {initialized && selectedHomes.length >= 2 && (
         <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
@@ -171,7 +284,7 @@ export default function Compare() {
                         <CategoryBadge category={category === 'Uncategorized' ? null : category} />
                       </td>
                       {selectedHomes.map(home => {
-                        const val = results[home.id]?.[category]
+                        const val = getCategoryAvg(home.id, category)
                         const isBest = val != null && val === best
                         return (
                           <td key={home.id} className="px-5 py-3">
@@ -198,11 +311,11 @@ export default function Compare() {
                   <td className="px-5 py-3 text-blue-700 text-sm">Overall avg</td>
                   {selectedHomes.map(home => {
                     const vals = allCategories
-                      .map(c => results[home.id]?.[c])
+                      .map(c => getCategoryAvg(home.id, c))
                       .filter(v => v != null)
                     const overall = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null
                     const bestOverall = selectedHomes.reduce((best, h) => {
-                      const hVals = allCategories.map(c => results[h.id]?.[c]).filter(v => v != null)
+                      const hVals = allCategories.map(c => getCategoryAvg(h.id, c)).filter(v => v != null)
                       const hAvg = hVals.length ? Math.round(hVals.reduce((a, b) => a + b, 0) / hVals.length) : null
                       return (hAvg != null && (best == null || hAvg < best)) ? hAvg : best
                     }, null)
