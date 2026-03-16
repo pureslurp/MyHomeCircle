@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext'
 
 const SUGGESTED_CATEGORIES = ['Work', 'Family', 'Friends', 'Gym', 'Restaurant', 'Shopping', 'Healthcare']
 
-const EMPTY_FORM = { name: '', category: '', address: '', lat: null, lng: null }
+const EMPTY_FORM = { name: '', category: '', address: '', lat: null, lng: null, visits_per_week: 1 }
 
 export default function SavedLocations() {
   const { user } = useAuth()
@@ -44,7 +44,7 @@ export default function SavedLocations() {
 
   async function startEdit(loc) {
     setEditId(loc.id)
-    setForm({ name: loc.name, category: loc.category || '', address: loc.address, lat: loc.lat, lng: loc.lng })
+    setForm({ name: loc.name, category: loc.category || '', address: loc.address, lat: loc.lat, lng: loc.lng, visits_per_week: loc.visits_per_week ?? 1 })
     setBranches([])
     originalBranchIdsRef.current = []
     setError(null)
@@ -83,6 +83,8 @@ export default function SavedLocations() {
   async function save() {
     if (!form.name.trim()) return setError('Name is required.')
     if (!form.address || form.lat == null) return setError('Please select an address from the dropdown.')
+    const vpw = parseFloat(form.visits_per_week)
+    if (isNaN(vpw) || vpw <= 0) return setError('Visits per week must be a positive number.')
     const incompleteBranches = branches.filter(b => b.address && b.lat == null)
     if (incompleteBranches.length > 0) return setError('Please select each branch address from the dropdown.')
 
@@ -96,6 +98,7 @@ export default function SavedLocations() {
       address: form.address,
       lat: form.lat,
       lng: form.lng,
+      visits_per_week: parseFloat(form.visits_per_week) || 1,
     }
 
     const validBranches = branches.filter(b => b.lat != null)
@@ -231,6 +234,19 @@ export default function SavedLocations() {
                 ))}
               </div>
             </div>
+          </div>
+
+          <div className="sm:max-w-xs">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Visits per week</label>
+            <input
+              type="number"
+              min="0.1"
+              step="0.5"
+              value={form.visits_per_week}
+              onChange={e => setForm(f => ({ ...f, visits_per_week: e.target.value }))}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">Used for frequency-weighted scoring on Compare.</p>
           </div>
 
           <div>

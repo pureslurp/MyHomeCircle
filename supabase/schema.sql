@@ -12,8 +12,13 @@ CREATE TABLE IF NOT EXISTS saved_locations (
   address TEXT NOT NULL,
   lat DECIMAL(10, 8) NOT NULL,
   lng DECIMAL(11, 8) NOT NULL,
+  visits_per_week NUMERIC DEFAULT 1 CHECK (visits_per_week > 0),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- To add visits_per_week to an existing database, run:
+--   ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS visits_per_week NUMERIC DEFAULT 1 CHECK (visits_per_week > 0);
+--   UPDATE saved_locations SET visits_per_week = 1 WHERE visits_per_week IS NULL;
 
 -- Prospective homes / locations being evaluated
 CREATE TABLE IF NOT EXISTS prospective_homes (
