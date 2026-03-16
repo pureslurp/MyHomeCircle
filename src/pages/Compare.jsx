@@ -13,7 +13,9 @@ export default function Compare() {
   const [results, setResults] = useState({}) // homeId -> { locationId -> minutes }
   const [loading, setLoading] = useState(false)
   const [initialized, setInitialized] = useState(false)
-  const [filterOpen, setFilterOpen] = useState(true)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [scoringMode, setScoringMode] = useState('A') // 'A' = frequency-weighted, 'B' = category-importance
+  const [categoryWeights, setCategoryWeights] = useState({}) // category -> 1..5
 
   useEffect(() => {
     async function load() {
@@ -24,6 +26,12 @@ export default function Compare() {
       setHomes(homesData || [])
       setSavedLocations(locsData || [])
       setActiveLocations(new Set((locsData || []).map(l => l.id)))
+      const cats = [...new Set((locsData || []).map(l => l.category || 'Uncategorized'))]
+      setCategoryWeights(prev => {
+        const next = { ...prev }
+        cats.forEach(c => { if (next[c] == null) next[c] = 3 })
+        return next
+      })
     }
     load()
   }, [])
@@ -82,18 +90,48 @@ export default function Compare() {
     setLoading(false)
   }
 
-  // Compute category average for a home, respecting activeLocations
-  function getCategoryAvg(homeId, category) {
-    const locs = savedLocations.filter(l => (l.category || 'Uncategorized') === category && activeLocations.has(l.id))
-    const vals = locs.map(l => results[homeId]?.[l.id]).filter(v => v != null)
-    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null
-  }
-
   // All categories present across saved locations
   const allCategories = [...new Set(savedLocations.map(l => l.category || 'Uncategorized'))]
 
   // Selected home objects (maintain compare order)
   const selectedHomes = selected.map(id => homes.find(h => h.id === id)).filter(Boolean)
+
+  // Category average for a home, respecting activeLocations and scoringMode
+  function getCategoryAvg(homeId, category) {
+    const locs = savedLocations.filter(
+      l => (l.category || 'Uncategorized') === category && activeLocations.has(l.id)
+    )
+    const pairs = locs
+      .map(l => ({ val: results[homeId]?.[l.id], weight: l.visits_per_week ?? 1 }))
+      .filter(p => p.val != null)
+    if (!pairs.length) return null
+    if (scoringMode === 'A') {
+      const sumW = pairs.reduce((s, p) => s + p.weight, 0)
+      return Math.round(pairs.reduce((s, p) => s + p.val * p.weight, 0) / sumW)
+    }
+    return Math.round(pairs.reduce((s, p) => s + p.val, 0) / pairs.length)
+  }
+
+  // Overall score for a home across all active locations
+  function getOverallScore(homeId) {
+    if (scoringMode === 'A') {
+      // Flat frequency-weighted average across all active locations
+      const locs = savedLocations.filter(l => activeLocations.has(l.id))
+      const pairs = locs
+        .map(l => ({ val: results[homeId]?.[l.id], weight: l.visits_per_week ?? 1 }))
+        .filter(p => p.val != null)
+      if (!pairs.length) return null
+      const sumW = pairs.reduce((s, p) => s + p.weight, 0)
+      return Math.round(pairs.reduce((s, p) => s + p.val * p.weight, 0) / sumW)
+    }
+    // Mode B: weighted average of category averages using slider weights
+    const catPairs = allCategories
+      .map(c => ({ avg: getCategoryAvg(homeId, c), weight: categoryWeights[c] ?? 3 }))
+      .filter(p => p.avg != null)
+    if (!catPairs.length) return null
+    const sumW = catPairs.reduce((s, p) => s + p.weight, 0)
+    return Math.round(catPairs.reduce((s, p) => s + p.avg * p.weight, 0) / sumW)
+  }
 
   // Best (lowest) time per category across selected homes
   function getBest(category) {
@@ -104,6 +142,11 @@ export default function Compare() {
     })
     return best
   }
+
+  const bestOverall = initialized ? selectedHomes.reduce((best, h) => {
+    const score = getOverallScore(h.id)
+    return (score != null && (best == null || score < best)) ? score : best
+  }, null) : null
 
   if (homes.length === 0) {
     return (
@@ -129,7 +172,7 @@ export default function Compare() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Compare Homes</h1>
-        <p className="text-gray-500 text-sm mt-1">Select two or more homes to compare average driving times side by side.</p>
+        <p className="text-gray-500 text-sm mt-1">Select two or more homes to compare driving times side by side.</p>
       </div>
 
       {/* Home selector */}
@@ -172,6 +215,65 @@ export default function Compare() {
         </button>
         {selected.length === 1 && <p className="text-xs text-gray-400 mt-2">Select at least one more home to compare.</p>}
       </div>
+
+      {/* Scoring mode toggle */}
+      {initialized && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-4 flex-wrap">
+          <span className="text-sm font-semibold text-gray-700">Scoring mode</span>
+          <div className="flex rounded-xl border border-gray-200 overflow-hidden text-sm">
+            <button
+              onClick={() => setScoringMode('A')}
+              className={`px-4 py-1.5 font-medium transition-colors ${
+                scoringMode === 'A' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              Frequency-weighted
+            </button>
+            <button
+              onClick={() => setScoringMode('B')}
+              className={`px-4 py-1.5 font-medium transition-colors border-l border-gray-200 ${
+                scoringMode === 'B' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+              }`}
+            >
+              Category importance
+            </button>
+          </div>
+          <p className="text-xs text-gray-400">
+            {scoringMode === 'A'
+              ? 'Weights locations by visits/week.'
+              : 'Adjust sliders to set category importance.'}
+          </p>
+        </div>
+      )}
+
+      {/* Category importance sliders (Mode B only) */}
+      {initialized && scoringMode === 'B' && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
+          <h2 className="text-sm font-semibold text-gray-700">Category importance</h2>
+          <p className="text-xs text-gray-400">Drag sliders to set how much each category matters to you.</p>
+          <div className="space-y-2">
+            {allCategories.map(category => (
+              <div key={category} className="flex items-center gap-3">
+                <div className="w-28 shrink-0">
+                  <CategoryBadge category={category === 'Uncategorized' ? null : category} />
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={categoryWeights[category] ?? 3}
+                  onChange={e => setCategoryWeights(prev => ({ ...prev, [category]: Number(e.target.value) }))}
+                  className="flex-1 accent-blue-600"
+                />
+                <span className="text-sm font-semibold text-gray-700 w-4 text-right">
+                  {categoryWeights[category] ?? 3}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filter places panel */}
       {initialized && savedLocations.length > 0 && (
@@ -245,6 +347,9 @@ export default function Compare() {
                             </div>
                             <span className={`text-sm truncate ${isActive ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
                               {loc.name}
+                              {scoringMode === 'A' && (loc.visits_per_week ?? 1) !== 1 && (
+                                <span className="ml-1 text-gray-400 text-xs">({loc.visits_per_week}×/wk)</span>
+                              )}
                             </span>
                           </button>
                         )
@@ -306,19 +411,13 @@ export default function Compare() {
                   )
                 })}
 
-                {/* Overall average row */}
+                {/* Overall score row */}
                 <tr className="bg-blue-50 font-semibold">
-                  <td className="px-5 py-3 text-blue-700 text-sm">Overall avg</td>
+                  <td className="px-5 py-3 text-blue-700 text-sm">
+                    {scoringMode === 'A' ? 'Weighted avg' : 'Importance-weighted avg'}
+                  </td>
                   {selectedHomes.map(home => {
-                    const vals = allCategories
-                      .map(c => getCategoryAvg(home.id, c))
-                      .filter(v => v != null)
-                    const overall = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null
-                    const bestOverall = selectedHomes.reduce((best, h) => {
-                      const hVals = allCategories.map(c => getCategoryAvg(h.id, c)).filter(v => v != null)
-                      const hAvg = hVals.length ? Math.round(hVals.reduce((a, b) => a + b, 0) / hVals.length) : null
-                      return (hAvg != null && (best == null || hAvg < best)) ? hAvg : best
-                    }, null)
+                    const overall = getOverallScore(home.id)
                     return (
                       <td key={home.id} className="px-5 py-3">
                         {overall != null ? (
