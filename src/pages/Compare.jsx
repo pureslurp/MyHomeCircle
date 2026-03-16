@@ -241,37 +241,8 @@ export default function Compare() {
           <p className="text-xs text-gray-400">
             {scoringMode === 'A'
               ? 'Weights locations by visits/week.'
-              : 'Adjust sliders to set category importance.'}
+              : 'Adjust category weights directly in the table below.'}
           </p>
-        </div>
-      )}
-
-      {/* Category importance sliders (Mode B only) */}
-      {initialized && scoringMode === 'B' && (
-        <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-gray-700">Category importance</h2>
-          <p className="text-xs text-gray-400">Drag sliders to set how much each category matters to you.</p>
-          <div className="space-y-2">
-            {allCategories.map(category => (
-              <div key={category} className="flex items-center gap-3">
-                <div className="w-28 shrink-0">
-                  <CategoryBadge category={category === 'Uncategorized' ? null : category} />
-                </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={5}
-                  step={1}
-                  value={categoryWeights[category] ?? 3}
-                  onChange={e => setCategoryWeights(prev => ({ ...prev, [category]: Number(e.target.value) }))}
-                  className="flex-1 accent-blue-600"
-                />
-                <span className="text-sm font-semibold text-gray-700 w-4 text-right">
-                  {categoryWeights[category] ?? 3}
-                </span>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -371,6 +342,9 @@ export default function Compare() {
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
                   <th className="text-left px-5 py-3 font-semibold text-gray-600 w-40">Category</th>
+                  {scoringMode === 'B' && (
+                    <th className="px-3 py-3 font-semibold text-gray-400 text-xs w-16 text-center">Weight</th>
+                  )}
                   {selectedHomes.map(home => (
                     <th key={home.id} className="text-left px-5 py-3 font-semibold text-gray-900 min-w-[150px]">
                       <Link to={`/homes/${home.id}`} className="hover:text-blue-600 hover:underline truncate block max-w-[160px]">
@@ -388,6 +362,25 @@ export default function Compare() {
                       <td className="px-5 py-3">
                         <CategoryBadge category={category === 'Uncategorized' ? null : category} />
                       </td>
+                      {scoringMode === 'B' && (
+                        <td className="px-3 py-3">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => setCategoryWeights(prev => ({ ...prev, [category]: Math.max(1, (prev[category] ?? 3) - 1) }))}
+                              className="w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                            >
+                              <ChevronDown size={12} />
+                            </button>
+                            <span className="text-sm font-semibold text-gray-700 w-3 text-center">{categoryWeights[category] ?? 3}</span>
+                            <button
+                              onClick={() => setCategoryWeights(prev => ({ ...prev, [category]: Math.min(5, (prev[category] ?? 3) + 1) }))}
+                              className="w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                            >
+                              <ChevronUp size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                       {selectedHomes.map(home => {
                         const val = getCategoryAvg(home.id, category)
                         const isBest = val != null && val === best
@@ -416,6 +409,7 @@ export default function Compare() {
                   <td className="px-5 py-3 text-blue-700 text-sm">
                     {scoringMode === 'A' ? 'Weighted avg' : 'Importance-weighted avg'}
                   </td>
+                  {scoringMode === 'B' && <td />}
                   {selectedHomes.map(home => {
                     const overall = getOverallScore(home.id)
                     return (
